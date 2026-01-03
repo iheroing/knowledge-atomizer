@@ -1,0 +1,8 @@
+# Core dependencies
+python-docx>=0.8.11
+streamlit>=1.28.0
+requests>=2.31.0
+
+# Testing dependencies
+pytest>=7.4.0
+hypothesis>=6.92.0
