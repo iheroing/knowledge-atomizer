@@ -11,13 +11,27 @@ from .base import BaseExporter
 
 
 class CSVExporter(BaseExporter):
-    """CSV 导出器 - 生成 UTF-8 with BOM 编码的 CSV 文件"""
+    """CSV 导出器 - 生成 UTF-8 with BOM 编码的 CSV 文件
+    
+    字段与飞书多维表格保持一致，方便直接导入
+    """
     
     # UTF-8 BOM bytes
     UTF8_BOM = b'\xef\xbb\xbf'
     
-    # CSV column headers
-    HEADERS = ['id', 'title', 'content', 'level', 'parent_id', 'parent_title', 'source_file', 'path']
+    # CSV column headers (与飞书字段一致)
+    HEADERS = ['原子ID', '标题', '内容', '层级', '父节点', '来源文件', '知识路径']
+    
+    # Internal field mapping
+    FIELD_MAP = {
+        '原子ID': 'id',
+        '标题': 'title',
+        '内容': 'content',
+        '层级': 'level',
+        '父节点': 'parent_title',
+        '来源文件': 'source_file',
+        '知识路径': 'path'
+    }
     
     def export(self, atoms: List[KnowledgeAtom], output_path: str = None) -> ExportResult:
         """生成 UTF-8 with BOM 编码的 CSV 文件
@@ -77,20 +91,19 @@ class CSVExporter(BaseExporter):
         output = io.StringIO()
         writer = csv.writer(output, quoting=csv.QUOTE_ALL)
         
-        # Write header
+        # Write header (中文列名，与飞书一致)
         writer.writerow(self.HEADERS)
         
         # Write data rows
         for atom in atoms:
             row = [
-                atom.id,
-                atom.title,
-                self._escape_content(atom.content),
-                atom.level,
-                atom.parent_id or '',
-                atom.parent_title or '',
-                atom.source_file,
-                atom.path or ''
+                atom.id,                          # 原子ID
+                atom.title,                       # 标题
+                self._escape_content(atom.content),  # 内容
+                atom.level,                       # 层级
+                atom.parent_title or '',          # 父节点
+                atom.source_file,                 # 来源文件
+                atom.path or ''                   # 知识路径
             ]
             writer.writerow(row)
         
