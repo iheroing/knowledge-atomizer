@@ -148,8 +148,8 @@ class ObsidianExporter(BaseExporter):
             if len(path_parts) > 1:
                 aliases.append(path_parts[-1])  # 最后一级
         if aliases:
-            alias_str = ', '.join(f'"{a}"' for a in aliases)
-            lines.append(f'aliases: [{alias_str}]')
+            quoted_aliases = ['"{}"'.format(a) for a in aliases]
+            lines.append(f'aliases: [{", ".join(quoted_aliases)}]')
         
         # 标签 (tags)
         tags = self._generate_tags(atom)

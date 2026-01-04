@@ -2,7 +2,6 @@
 
 ## Overview
 
-Knowledge Atomizer 是一个 Python ETL 系统，采用分层架构将 Word 文档转换为结构化知识原子。系统由三个核心层组成：解析层（Parser）、转换层（Transformer）、输出层（Exporter），通过 Streamlit Web 界面提供用户交互。
 
 ## Architecture
 

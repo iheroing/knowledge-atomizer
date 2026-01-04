@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models import KnowledgeAtom
 from src.parser import DocumentParser, ParserError
+from src.markdown_parser import MarkdownParser
 from src.transformer import KnowledgeTransformer
 from src.statistics import compute_statistics
 from src.exporters.csv_exporter import CSVExporter
@@ -24,7 +25,8 @@ class KnowledgeAtomizerApp:
     
     def __init__(self):
         """初始化应用"""
-        self.parser = DocumentParser()
+        self.docx_parser = DocumentParser()
+        self.md_parser = MarkdownParser()
         self.transformer = KnowledgeTransformer()
     
     def run(self):
@@ -78,15 +80,21 @@ class KnowledgeAtomizerApp:
         
         # Header
         st.markdown('<p class="main-header">🧬 Knowledge Atomizer</p>', unsafe_allow_html=True)
-        st.markdown('<p class="sub-header">知识原子化中台 - 将 Word 文档转换为结构化知识原子，支持飞书多维表格和 Obsidian</p>', unsafe_allow_html=True)
+        st.markdown('<p class="sub-header">知识原子化中台 - 将 Word/Markdown 文档转换为结构化知识原子，支持飞书多维表格和 Obsidian</p>', unsafe_allow_html=True)
         
         # Initialize session state
         if 'atoms' not in st.session_state:
             st.session_state.atoms = None
         if 'source_file' not in st.session_state:
             st.session_state.source_file = None
+        if 'source_files' not in st.session_state:
+            st.session_state.source_files = []
         if 'selected_atom' not in st.session_state:
             st.session_state.selected_atom = None
+        if 'csv_data' not in st.session_state:
+            st.session_state.csv_data = None
+        if 'zip_data' not in st.session_state:
+            st.session_state.zip_data = None
         
         # Sidebar for upload and stats
         with st.sidebar:
@@ -102,15 +110,21 @@ class KnowledgeAtomizerApp:
         """渲染侧边栏"""
         st.header("📤 上传文档")
         
-        uploaded_file = st.file_uploader(
-            "选择 Word 文档",
-            type=['docx'],
-            help="支持 .docx 格式的 Word 文档"
+        uploaded_files = st.file_uploader(
+            "选择文档（支持多选）",
+            type=['docx', 'md'],
+            accept_multiple_files=True,
+            help="支持 .docx (Word) 和 .md (Markdown) 格式"
         )
         
-        if uploaded_file is not None:
+        if uploaded_files:
+            st.caption(f"已选择 {len(uploaded_files)} 个文件")
+            for f in uploaded_files:
+                file_icon = "📄" if f.name.endswith('.docx') else "📝"
+                st.text(f"{file_icon} {f.name}")
+            
             if st.button("🚀 开始解析", use_container_width=True, type="primary"):
-                self._process_file(uploaded_file)
+                self._process_files(uploaded_files)
         
         # Show stats if atoms exist
         if st.session_state.atoms:
@@ -128,40 +142,96 @@ class KnowledgeAtomizerApp:
                     st.progress(progress, text=f"H{level}: {count} 个")
             
             st.divider()
-            st.markdown(f"**来源文件**: {st.session_state.source_file}")
+            # Show source files
+            if st.session_state.source_files:
+                st.markdown(f"**来源文件** ({len(st.session_state.source_files)} 个):")
+                for sf in st.session_state.source_files:
+                    st.text(f"  • {sf}")
+            else:
+                st.markdown(f"**来源文件**: {st.session_state.source_file}")
             
             if st.button("🗑️ 清除数据", use_container_width=True):
-                st.session_state.atoms = None
-                st.session_state.source_file = None
-                st.session_state.selected_atom = None
-                st.session_state.csv_data = None
-                st.session_state.zip_data = None
+                self._clear_all_data()
                 st.rerun()
     
-    def _process_file(self, uploaded_file):
-        """处理上传的文件"""
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+    def _process_files(self, uploaded_files):
+        """处理多个上传的文件"""
+        all_atoms = []
+        source_files = []
+        errors = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, uploaded_file in enumerate(uploaded_files):
+            status_text.text(f"正在解析: {uploaded_file.name}")
+            progress_bar.progress((i + 1) / len(uploaded_files))
+            
+            try:
+                atoms = self._parse_single_file(uploaded_file)
+                all_atoms.extend(atoms)
+                source_files.append(uploaded_file.name)
+            except Exception as e:
+                errors.append(f"{uploaded_file.name}: {str(e)}")
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        if all_atoms:
+            st.session_state.atoms = all_atoms
+            st.session_state.source_files = source_files
+            st.session_state.source_file = ", ".join(source_files)
+            
+            # Clear cached exports
+            self._clear_export_cache()
+            
+            st.success(f"✅ 成功从 {len(source_files)} 个文件中提取 {len(all_atoms)} 个知识原子")
+            
+            if errors:
+                st.warning(f"⚠️ {len(errors)} 个文件解析失败:\n" + "\n".join(errors))
+            
+            st.rerun()
+        else:
+            st.error("❌ 所有文件解析失败:\n" + "\n".join(errors))
+    
+    def _parse_single_file(self, uploaded_file) -> List[KnowledgeAtom]:
+        """解析单个文件"""
+        filename = uploaded_file.name
+        suffix = '.md' if filename.endswith('.md') else '.docx'
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.getvalue())
             tmp_path = tmp.name
         
         try:
-            with st.spinner("正在解析文档..."):
-                tree = self.parser.parse(tmp_path)
-                atoms = self.transformer.transform(tree)
-                
-                st.session_state.atoms = atoms
-                st.session_state.source_file = uploaded_file.name
-                
-                st.success(f"✅ 成功提取 {len(atoms)} 个知识原子")
-                st.rerun()
-                
-        except ParserError as e:
-            st.error(f"❌ 解析失败: {str(e)}")
-        except Exception as e:
-            st.error(f"❌ 发生错误: {str(e)}")
+            if filename.endswith('.md'):
+                # Parse Markdown
+                tree = self.md_parser.parse(tmp_path)
+                tree.source_file = filename
+            else:
+                # Parse Word
+                tree = self.docx_parser.parse(tmp_path)
+                tree.source_file = filename
+            
+            atoms = self.transformer.transform(tree)
+            return atoms
+            
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+    
+    def _clear_export_cache(self):
+        """清除导出缓存"""
+        st.session_state.csv_data = None
+        st.session_state.zip_data = None
+    
+    def _clear_all_data(self):
+        """清除所有数据和缓存"""
+        st.session_state.atoms = None
+        st.session_state.source_file = None
+        st.session_state.source_files = []
+        st.session_state.selected_atom = None
+        self._clear_export_cache()
     
     def _render_welcome(self):
         """渲染欢迎页面"""
@@ -171,20 +241,25 @@ class KnowledgeAtomizerApp:
             ### 👋 欢迎使用 Knowledge Atomizer
             
             **功能特点：**
-            - 📄 解析 Word 文档的层级结构
+            - 📄 解析 Word (.docx) 和 Markdown (.md) 文档
+            - 📚 支持批量上传多个文件
             - 🧬 将内容拆解为独立的知识原子
             - 🌳 可视化知识树结构
             - 📤 导出到飞书多维表格、Obsidian、CSV
             
             **使用方法：**
-            1. 在左侧上传 Word 文档 (.docx)
+            1. 在左侧上传文档（支持多选）
             2. 点击"开始解析"按钮
             3. 预览知识结构
             4. 选择导出格式
             
+            **支持的格式：**
+            - `.docx` - Microsoft Word 文档
+            - `.md` - Markdown 文档（ATX 风格标题）
+            
             ---
             *请在左侧上传文档开始使用*
-            """)
+    
     
     def _render_main_content(self, atoms: List[KnowledgeAtom]):
         """渲染主内容区"""
