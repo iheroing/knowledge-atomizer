@@ -259,7 +259,7 @@ class KnowledgeAtomizerApp:
             
             ---
             *请在左侧上传文档开始使用*
-    
+            """)
     
     def _render_main_content(self, atoms: List[KnowledgeAtom]):
         """渲染主内容区"""
@@ -278,34 +278,46 @@ class KnowledgeAtomizerApp:
             self._render_export_section(atoms)
     
     def _render_tree_view(self, atoms: List[KnowledgeAtom]):
-        """渲染树形视图"""
+        """渲染树形视图 - 优化版本，使用 selectbox 替代大量按钮"""
         st.subheader("🌳 知识树结构")
         
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.markdown("**层级结构**")
-            root_atoms = [a for a in atoms if a.parent_id is None]
+            st.markdown("**选择知识原子**")
             
-            def render_tree_node(atom: KnowledgeAtom, depth: int = 0):
-                indent = "　　" * depth
-                prefix = "├─ " if depth > 0 else ""
-                level_colors = {1: "🔴", 2: "🟠", 3: "🟡", 4: "🟢", 5: "🔵"}
-                level_icon = level_colors.get(atom.level, "⚪")
+            # 使用 selectbox 替代大量按钮，大幅提升性能
+            atom_options = []
+            atom_map = {}
+            
+            for atom in atoms:
+                level_icons = {1: "🔴", 2: "🟠", 3: "🟡", 4: "🟢", 5: "🔵"}
+                icon = level_icons.get(atom.level, "⚪")
+                indent = "  " * (atom.level - 1)
+                label = f"{indent}{icon} H{atom.level} | {atom.title[:40]}"
+                atom_options.append(label)
+                atom_map[label] = atom
+            
+            if atom_options:
+                selected_label = st.selectbox(
+                    "选择节点查看详情",
+                    options=atom_options,
+                    index=0,
+                    label_visibility="collapsed"
+                )
                 
-                if st.button(
-                    f"{indent}{prefix}{level_icon} {atom.title}",
-                    key=f"tree_{atom.id}",
-                    use_container_width=True
-                ):
-                    st.session_state.selected_atom = atom
-                
-                children = [a for a in atoms if a.parent_id == atom.id]
-                for child in children:
-                    render_tree_node(child, depth + 1)
+                if selected_label:
+                    st.session_state.selected_atom = atom_map[selected_label]
+            
+            # 显示简化的树形结构（只显示前20个根节点）
+            st.markdown("**层级预览**")
+            root_atoms = [a for a in atoms if a.parent_id is None][:20]
             
             for root in root_atoms:
-                render_tree_node(root)
+                self._render_tree_text(root, atoms, 0, max_depth=2)
+            
+            if len([a for a in atoms if a.parent_id is None]) > 20:
+                st.caption(f"... 还有更多根节点")
         
         with col2:
             st.markdown("**详细信息**")
@@ -331,7 +343,23 @@ class KnowledgeAtomizerApp:
                 else:
                     st.caption("(无内容)")
             else:
-                st.info("👈 点击左侧节点查看详情")
+                st.info("👈 从左侧选择节点查看详情")
+    
+    def _render_tree_text(self, atom: KnowledgeAtom, all_atoms: List[KnowledgeAtom], depth: int, max_depth: int = 2):
+        """渲染树形文本（简化版，限制深度）"""
+        if depth > max_depth:
+            return
+        
+        indent = "　" * depth
+        prefix = "├─ " if depth > 0 else ""
+        level_icons = {1: "🔴", 2: "🟠", 3: "🟡", 4: "🟢", 5: "🔵"}
+        icon = level_icons.get(atom.level, "⚪")
+        
+        st.text(f"{indent}{prefix}{icon} {atom.title[:30]}")
+        
+        children = [a for a in all_atoms if a.parent_id == atom.id][:5]
+        for child in children:
+            self._render_tree_text(child, all_atoms, depth + 1, max_depth)
     
     def _render_list_view(self, atoms: List[KnowledgeAtom]):
         """渲染列表视图"""
@@ -376,14 +404,36 @@ class KnowledgeAtomizerApp:
                     st.caption("(无内容)")
     
     def _render_visualization(self, atoms: List[KnowledgeAtom]):
-        """渲染可视化图表"""
+        """渲染可视化图表 - 增强版，带下载功能"""
         import pandas as pd
+        import json
         
         st.subheader("📊 知识结构可视化")
         
         stats = compute_statistics(atoms)
         
-        # Row 1: Key metrics
+        # Row 1: Key metrics with styled cards
+        st.markdown("""
+        <style>
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 1.2rem;
+            border-radius: 12px;
+            color: white;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .metric-value {
+            font-size: 2rem;
+            font-weight: bold;
+        }
+        .metric-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("📚 总原子数", stats.total_count)
@@ -399,7 +449,7 @@ class KnowledgeAtomizerApp:
         
         st.divider()
         
-        # Row 2: Charts
+        # Row 2: Charts with download
         col1, col2 = st.columns(2)
         
         with col1:
@@ -409,10 +459,17 @@ class KnowledgeAtomizerApp:
                 '数量': [stats.level_counts.get(i, 0) for i in range(1, 6)]
             })
             st.bar_chart(level_data.set_index('层级'))
+            # 下载层级分布数据
+            st.download_button(
+                "⬇️ 下载层级数据",
+                data=level_data.to_csv(index=False).encode('utf-8-sig'),
+                file_name="层级分布.csv",
+                mime="text/csv",
+                key="dl_level"
+            )
         
         with col2:
             st.markdown("**📏 内容长度分布**")
-            # Group content lengths into buckets
             lengths = [len(a.content or "") for a in atoms]
             buckets = {'0': 0, '1-100': 0, '101-500': 0, '501-1000': 0, '1000+': 0}
             for l in lengths:
@@ -431,103 +488,223 @@ class KnowledgeAtomizerApp:
                 '数量': list(buckets.values())
             })
             st.bar_chart(length_data.set_index('长度区间'))
+            # 下载长度分布数据
+            st.download_button(
+                "⬇️ 下载长度数据",
+                data=length_data.to_csv(index=False).encode('utf-8-sig'),
+                file_name="内容长度分布.csv",
+                mime="text/csv",
+                key="dl_length"
+            )
         
         st.divider()
         
-        # Row 3: Tree visualization using graphviz
+        # Row 3: Tree visualization with controls
         st.markdown("**🌳 知识树结构图**")
         
+        # 添加控制选项
+        ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
+        with ctrl_col1:
+            max_nodes = st.slider("显示节点数", min_value=10, max_value=min(100, len(atoms)), value=min(40, len(atoms)), step=10)
+        with ctrl_col2:
+            layout_dir = st.selectbox("布局方向", ["从上到下", "从左到右"], index=0)
+        with ctrl_col3:
+            show_level = st.multiselect("显示层级", options=[1, 2, 3, 4, 5], default=[1, 2, 3], format_func=lambda x: f"H{x}")
+        with ctrl_col4:
+            st.markdown("")  # 占位
+            # 下载完整知识树 DOT 文件
+            full_dot = self._generate_graphviz_enhanced(atoms, "TB")
+            st.download_button(
+                "⬇️ 下载完整图表 (DOT)",
+                data=full_dot,
+                file_name="知识树.dot",
+                mime="text/plain",
+                key="dl_dot"
+            )
+        
         try:
-            # Generate graphviz DOT format
-            dot_code = self._generate_graphviz(atoms)
-            st.graphviz_chart(dot_code)
+            # 根据选项过滤
+            filtered_atoms = [a for a in atoms if a.level in show_level][:max_nodes]
+            direction = "TB" if layout_dir == "从上到下" else "LR"
+            dot_code = self._generate_graphviz_enhanced(filtered_atoms, direction)
+            st.graphviz_chart(dot_code, use_container_width=True)
+            st.caption(f"显示 {len(filtered_atoms)} / {len(atoms)} 个节点")
         except Exception as e:
             st.warning(f"图表渲染失败: {e}")
-            st.code(self._generate_mermaid(atoms), language="mermaid")
         
         st.divider()
         
-        # Row 4: Data table
-        st.markdown("**📋 数据概览**")
-        df = pd.DataFrame([{
-            '标题': a.title[:30] + ('...' if len(a.title) > 30 else ''),
-            '层级': f'H{a.level}',
-            '内容长度': len(a.content or ""),
-            '子节点数': len([x for x in atoms if x.parent_id == a.id]),
-            '路径深度': a.path.count(">") + 1
-        } for a in atoms[:50]])
-        st.dataframe(df, use_container_width=True)
+        # Row 4: 来源文件分布（如果有多个文件）
+        source_counts = {}
+        for a in atoms:
+            src = a.source_file
+            source_counts[src] = source_counts.get(src, 0) + 1
         
-        if len(atoms) > 50:
-            st.caption(f"仅显示前 50 条，共 {len(atoms)} 条")
+        if len(source_counts) > 1:
+            st.markdown("**📁 来源文件分布**")
+            source_df = pd.DataFrame({
+                '文件': list(source_counts.keys()),
+                '原子数': list(source_counts.values())
+            })
+            st.bar_chart(source_df.set_index('文件'))
+            st.download_button(
+                "⬇️ 下载来源分布",
+                data=source_df.to_csv(index=False).encode('utf-8-sig'),
+                file_name="来源文件分布.csv",
+                mime="text/csv",
+                key="dl_source"
+            )
+            st.divider()
+        
+        # Row 5: Data table with more info and download
+        st.markdown("**📋 完整数据表**")
+        
+        # 生成完整数据表
+        full_df = pd.DataFrame([{
+            'ID': a.id,
+            '标题': a.title,
+            '层级': a.level,
+            '内容': a.content or "",
+            '父节点': a.parent_title or "",
+            '知识路径': a.path,
+            '来源文件': a.source_file,
+            '内容长度': len(a.content or ""),
+            '子节点数': len([x for x in atoms if x.parent_id == a.id])
+        } for a in atoms])
+        
+        # 显示预览（前100条）
+        display_df = full_df.head(100).copy()
+        display_df['标题'] = display_df['标题'].str[:40] + display_df['标题'].str[40:].apply(lambda x: '...' if x else '')
+        display_df['内容'] = display_df['内容'].str[:50] + display_df['内容'].str[50:].apply(lambda x: '...' if x else '')
+        st.dataframe(display_df[['标题', '层级', '内容长度', '子节点数', '知识路径', '来源文件']], use_container_width=True, height=400)
+        
+        if len(atoms) > 100:
+            st.caption(f"预览前 100 条，共 {len(atoms)} 条")
+        
+        # 下载完整数据
+        dl_col1, dl_col2, dl_col3 = st.columns(3)
+        with dl_col1:
+            st.download_button(
+                "⬇️ 下载完整 CSV",
+                data=full_df.to_csv(index=False).encode('utf-8-sig'),
+                file_name="知识原子完整数据.csv",
+                mime="text/csv",
+                key="dl_full_csv"
+            )
+        with dl_col2:
+            # JSON 格式
+            json_data = json.dumps([{
+                'id': a.id,
+                'title': a.title,
+                'level': a.level,
+                'content': a.content or "",
+                'parent_id': a.parent_id,
+                'parent_title': a.parent_title,
+                'path': a.path,
+                'source_file': a.source_file
+            } for a in atoms], ensure_ascii=False, indent=2)
+            st.download_button(
+                "⬇️ 下载 JSON",
+                data=json_data,
+                file_name="知识原子.json",
+                mime="application/json",
+                key="dl_json"
+            )
+        with dl_col3:
+            # Markdown 格式
+            md_content = self._generate_markdown_export(atoms)
+            st.download_button(
+                "⬇️ 下载 Markdown",
+                data=md_content.encode('utf-8'),
+                file_name="知识原子.md",
+                mime="text/markdown",
+                key="dl_md"
+            )
     
-    def _generate_graphviz(self, atoms: List[KnowledgeAtom]) -> str:
-        """生成 Graphviz DOT 格式图表"""
+    def _generate_markdown_export(self, atoms: List[KnowledgeAtom]) -> str:
+        """生成 Markdown 格式的知识原子导出"""
+        lines = ["# 知识原子导出\n"]
+        lines.append(f"> 共 {len(atoms)} 个知识原子\n")
+        lines.append("---\n")
+        
+        # 按层级组织
+        root_atoms = [a for a in atoms if a.parent_id is None]
+        
+        def render_atom(atom: KnowledgeAtom, depth: int = 0):
+            prefix = "#" * (depth + 2)  # Start from ##
+            lines.append(f"{prefix} {atom.title}\n")
+            lines.append(f"**路径**: `{atom.path}`\n")
+            if atom.content:
+                lines.append(f"\n{atom.content}\n")
+            lines.append("")
+            
+            # Render children
+            children = [a for a in atoms if a.parent_id == atom.id]
+            for child in children:
+                render_atom(child, depth + 1)
+        
+        for root in root_atoms:
+            render_atom(root)
+        
+        return '\n'.join(lines)
+    
+    def _generate_graphviz_enhanced(self, atoms: List[KnowledgeAtom], direction: str = "TB") -> str:
+        """生成增强版 Graphviz DOT 格式图表"""
         lines = [
             'digraph G {',
-            '    rankdir=TB;',
-            '    node [shape=box, style="rounded,filled", fontname="Arial"];',
-            '    edge [color="#666666"];'
+            f'    rankdir={direction};',
+            '    bgcolor="transparent";',
+            '    node [shape=box, style="rounded,filled", fontname="Microsoft YaHei,Arial", fontsize=10];',
+            '    edge [color="#888888", arrowsize=0.7];',
+            '    graph [ranksep=0.5, nodesep=0.3];'
         ]
         
-        # Color mapping for levels
-        colors = {1: '#ff6b6b', 2: '#ffa94d', 3: '#ffd43b', 4: '#69db7c', 5: '#74c0fc'}
+        # Color mapping for levels with gradients
+        colors = {
+            1: '#ff6b6b',  # Red
+            2: '#ffa94d',  # Orange
+            3: '#ffd43b',  # Yellow
+            4: '#69db7c',  # Green
+            5: '#74c0fc'   # Blue
+        }
         
-        # Limit nodes for readability
-        display_atoms = atoms[:40]
+        # Build parent set for edge validation
+        atom_ids = {a.id for a in atoms}
         
-        for atom in display_atoms:
-            safe_title = atom.title[:15].replace('"', "'").replace('\n', ' ')
-            if len(atom.title) > 15:
+        for atom in atoms:
+            safe_title = atom.title[:20].replace('"', "'").replace('\n', ' ').replace('\\', '/')
+            if len(atom.title) > 20:
                 safe_title += '...'
             node_id = 'n' + atom.id[:8].replace('-', '')
             color = colors.get(atom.level, '#e9ecef')
-            lines.append(f'    {node_id} [label="{safe_title}", fillcolor="{color}"];')
             
-            if atom.parent_id:
+            # Add node with tooltip
+            tooltip = f"{atom.title}\\n层级: H{atom.level}\\n内容: {len(atom.content or '')} 字"
+            lines.append(f'    {node_id} [label="{safe_title}", fillcolor="{color}", tooltip="{tooltip}"];')
+            
+            # Add edge only if parent is in the filtered set
+            if atom.parent_id and atom.parent_id in atom_ids:
                 parent_id = 'n' + atom.parent_id[:8].replace('-', '')
                 lines.append(f'    {parent_id} -> {node_id};')
         
-        if len(atoms) > 40:
-            lines.append(f'    more [label="... 还有 {len(atoms) - 40} 个节点", style="dashed"];')
+        # Add legend
+        lines.append('    subgraph cluster_legend {')
+        lines.append('        label="图例";')
+        lines.append('        style=dashed;')
+        lines.append('        fontsize=9;')
+        lines.append('        legend1 [label="H1 章节", fillcolor="#ff6b6b"];')
+        lines.append('        legend2 [label="H2 小节", fillcolor="#ffa94d"];')
+        lines.append('        legend3 [label="H3 主题", fillcolor="#ffd43b"];')
+        lines.append('        legend1 -> legend2 -> legend3 [style=invis];')
+        lines.append('    }')
         
         lines.append('}')
         return '\n'.join(lines)
     
-    def _generate_mermaid(self, atoms: List[KnowledgeAtom]) -> str:
-        """生成 Mermaid 图表代码"""
-        lines = ["graph TD"]
-        
-        # Limit to first 30 nodes for readability
-        display_atoms = atoms[:30]
-        
-        for atom in display_atoms:
-            safe_title = atom.title[:20].replace('"', "'").replace("[", "(").replace("]", ")")
-            node_id = atom.id[:8]
-            lines.append(f'    {node_id}["{safe_title}"]')
-            
-            if atom.parent_id:
-                parent_id = atom.parent_id[:8]
-                lines.append(f'    {parent_id} --> {node_id}')
-        
-        if len(atoms) > 30:
-            lines.append(f'    more["... 还有 {len(atoms) - 30} 个节点"]')
-        
-        return "\n".join(lines)
-    
     def _render_export_section(self, atoms: List[KnowledgeAtom]):
-        """渲染导出选项"""
+        """渲染导出选项 - 优化版本，按需生成"""
         st.subheader("📥 导出知识原子")
         st.caption(f"来源文件: {st.session_state.source_file} | 共 {len(atoms)} 个知识原子")
-        
-        # Initialize session state for exports
-        if 'csv_data' not in st.session_state:
-            st.session_state.csv_data = None
-        if 'zip_data' not in st.session_state:
-            st.session_state.zip_data = None
-        
-        # Pre-generate exports
-        self._prepare_exports(atoms)
         
         # Three columns for export buttons
         col1, col2, col3 = st.columns(3)
@@ -535,6 +712,12 @@ class KnowledgeAtomizerApp:
         with col1:
             st.markdown("### 📄 CSV")
             st.caption("Excel 兼容格式")
+            
+            # 按需生成 CSV
+            if st.button("生成 CSV", key="gen_csv", use_container_width=True):
+                with st.spinner("生成中..."):
+                    self._generate_csv(atoms)
+            
             if st.session_state.csv_data:
                 st.download_button(
                     label="⬇️ 下载 CSV",
@@ -547,6 +730,12 @@ class KnowledgeAtomizerApp:
         with col2:
             st.markdown("### 📚 Obsidian")
             st.caption("知识库 ZIP 包")
+            
+            # 按需生成 ZIP
+            if st.button("生成 ZIP", key="gen_zip", use_container_width=True):
+                with st.spinner("生成中..."):
+                    self._generate_zip(atoms)
+            
             if st.session_state.zip_data:
                 st.download_button(
                     label="⬇️ 下载 ZIP",
@@ -559,7 +748,6 @@ class KnowledgeAtomizerApp:
         with col3:
             st.markdown("### 🐦 飞书")
             st.caption("同步到多维表格")
-            # Show sync button only if config exists
             if st.session_state.get('lark_configured'):
                 if st.button("🚀 同步到飞书", key="lark_sync_btn", use_container_width=True, type="primary"):
                     self._export_lark(
@@ -584,7 +772,7 @@ class KnowledgeAtomizerApp:
                 app_secret = st.text_input("App Secret", type="password", placeholder="xxxxxxxxxx", key="lark_app_secret_input")
                 table_id = st.text_input("Table ID", placeholder="tblxxxxxxxxxx", key="lark_table_id_input")
             
-            st.caption("💡 飞书多维表格需要的字段：原子ID、标题、内容、层级、父节点、来源文件、知识路径")
+            st.caption("� 飞书多维配表格需要的字段：原子ID、标题、内容、层级、父节点、来源文件、知识路径")
             
             if st.button("💾 保存配置", use_container_width=True):
                 if all([app_id, app_secret, app_token, table_id]):
@@ -598,31 +786,31 @@ class KnowledgeAtomizerApp:
                 else:
                     st.error("请填写所有配置项")
     
-    def _prepare_exports(self, atoms: List[KnowledgeAtom]):
-        """预生成导出文件"""
-        # Generate CSV if not exists
-        if st.session_state.csv_data is None:
-            try:
-                exporter = CSVExporter()
-                result = exporter.export(atoms)
-                if result.success and result.file_path:
-                    with open(result.file_path, 'rb') as f:
-                        st.session_state.csv_data = f.read()
-                    os.unlink(result.file_path)
-            except Exception:
-                pass
-        
-        # Generate ZIP if not exists
-        if st.session_state.zip_data is None:
-            try:
-                exporter = ObsidianExporter()
-                result = exporter.export(atoms)
-                if result.success and result.file_path:
-                    with open(result.file_path, 'rb') as f:
-                        st.session_state.zip_data = f.read()
-                    os.unlink(result.file_path)
-            except Exception:
-                pass
+    def _generate_csv(self, atoms: List[KnowledgeAtom]):
+        """生成 CSV 数据"""
+        try:
+            exporter = CSVExporter()
+            result = exporter.export(atoms)
+            if result.success and result.file_path:
+                with open(result.file_path, 'rb') as f:
+                    st.session_state.csv_data = f.read()
+                os.unlink(result.file_path)
+                st.success("CSV 生成完成！")
+        except Exception as e:
+            st.error(f"生成失败: {e}")
+    
+    def _generate_zip(self, atoms: List[KnowledgeAtom]):
+        """生成 Obsidian ZIP 数据"""
+        try:
+            exporter = ObsidianExporter()
+            result = exporter.export(atoms)
+            if result.success and result.file_path:
+                with open(result.file_path, 'rb') as f:
+                    st.session_state.zip_data = f.read()
+                os.unlink(result.file_path)
+                st.success("ZIP 生成完成！")
+        except Exception as e:
+            st.error(f"生成失败: {e}")
     
     def _export_lark(self, atoms: List[KnowledgeAtom], app_id: str, app_secret: str, app_token: str, table_id: str):
         """导出到飞书"""
